@@ -1,4 +1,4 @@
-const { Client, GatewayIntentBits, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, PermissionsBitField } = require('discord.js');
+const { Client, GatewayIntentBits, EmbedBuilder, PermissionsBitField } = require('discord.js');
 const fs = require('fs');
 const express = require('express');
 const bodyParser = require('body-parser');
@@ -19,6 +19,7 @@ let users = {};
 function loadDB() {
     if (fs.existsSync(DB_FILE)) {
         users = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
+        console.log(`📦 Geladene Benutzer: ${Object.keys(users).length}`);
     }
 }
 
@@ -32,9 +33,17 @@ loadDB();
 const app = express();
 app.use(bodyParser.json());
 
+// CORS für Cheat
+app.use((req, res, next) => {
+    res.header('Access-Control-Allow-Origin', '*');
+    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept');
+    next();
+});
+
 // API Endpoint für Login
 app.post('/api/login', (req, res) => {
     const { username, password, hwid } = req.body;
+    console.log(`📝 Login Versuch: ${username} - HWID: ${hwid.substring(0, 8)}...`);
     
     if (!users[username]) {
         return res.json({ success: false, message: 'Benutzer nicht gefunden!' });
@@ -51,6 +60,7 @@ app.post('/api/login', (req, res) => {
         user.hwid = hwid;
         user.created_at = Date.now();
         saveDB();
+        console.log(`🔒 HWID gebunden an ${username}`);
     } else if (user.hwid !== hwid) {
         return res.json({ success: false, message: 'Diese Lizenz ist an eine andere HWID gebunden!' });
     }
@@ -60,6 +70,8 @@ app.post('/api/login', (req, res) => {
         return res.json({ success: false, message: 'Lizenz abgelaufen! Kontaktiere den Support.' });
     }
     
+    const daysLeft = Math.ceil((user.expires_at - Date.now()) / (1000 * 60 * 60 * 24));
+    
     res.json({
         success: true,
         message: 'Login erfolgreich',
@@ -67,7 +79,8 @@ app.post('/api/login', (req, res) => {
         user: {
             username: username,
             rank: user.rank,
-            expires_at: user.expires_at
+            expires_at: user.expires_at,
+            days_left: daysLeft
         }
     });
 });
@@ -76,18 +89,36 @@ app.post('/api/login', (req, res) => {
 app.get('/api/status', (req, res) => {
     const totalUsers = Object.keys(users).length;
     const activeUsers = Object.values(users).filter(u => u.expires_at > Date.now()).length;
-    res.json({ online: true, totalUsers, activeUsers, timestamp: Date.now() });
+    res.json({ 
+        online: true, 
+        totalUsers, 
+        activeUsers, 
+        timestamp: Date.now(),
+        version: '4.2.0'
+    });
 });
 
-app.listen(3000, () => console.log('✅ API läuft auf Port 3000'));
+// Health Check für Render
+app.get('/health', (req, res) => {
+    res.json({ status: 'online', uptime: process.uptime() });
+});
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`✅ API läuft auf Port ${PORT}`));
 
 // ============== DISCORD BOT COMMANDS ==============
 const PREFIX = '!';
-const ADMIN_ROLE_ID = 'YOUR_ADMIN_ROLE_ID'; // ÄNDERE DAS!
+// ÄNDERE DAS ZU DEINER ADMIN ROLE ID
+const ADMIN_ROLE_ID = process.env.ADMIN_ROLE_ID || '1513159020897243247';
 
 function isAdmin(member) {
     return member.roles.cache.has(ADMIN_ROLE_ID) || member.permissions.has(PermissionsBitField.Flags.Administrator);
 }
+
+client.on('ready', () => {
+    console.log(`✅ Bot eingeloggt als ${client.user.tag}`);
+    client.user.setActivity('Enox Cheat System', { type: 'WATCHING' });
+});
 
 client.on('messageCreate', async (message) => {
     if (message.author.bot) return;
@@ -99,7 +130,7 @@ client.on('messageCreate', async (message) => {
     // ========== !createuser <name> <pass> <tage> ==========
     if (command === 'createuser') {
         if (!isAdmin(message.member)) {
-            return message.reply('❌ Keine Berechtigung!');
+            return message.reply('❌ Keine Berechtigung! Du brauchst die Admin Rolle.');
         }
         
         const username = args[0];
@@ -107,7 +138,7 @@ client.on('messageCreate', async (message) => {
         const days = parseInt(args[2]);
         
         if (!username || !password || !days) {
-            return message.reply('✅ !createuser <Benutzername> <Passwort> <Tage>');
+            return message.reply('✅ !createuser <Benutzername> <Passwort> <Tage>\n📝 Beispiel: !createuser EnoxUser Pass123 30');
         }
         
         if (users[username]) {
@@ -132,12 +163,13 @@ client.on('messageCreate', async (message) => {
             .setTitle('✅ Benutzer erstellt')
             .setColor(0x9C27B0)
             .addFields(
-                { name: 'Benutzername', value: username, inline: true },
-                { name: 'Passwort', value: `||${password}||`, inline: true },
-                { name: 'Gültig bis', value: expireDate, inline: true },
-                { name: 'Tage', value: `${days} Tage`, inline: true }
+                { name: '👤 Benutzername', value: `\`${username}\``, inline: true },
+                { name: '🔑 Passwort', value: `||${password}||`, inline: true },
+                { name: '📅 Gültig bis', value: expireDate, inline: true },
+                { name: '⏰ Tage', value: `${days} Tage`, inline: true },
+                { name: '🛡️ Rang', value: 'Premium', inline: true }
             )
-            .setFooter({ text: 'Enox Cheat System' })
+            .setFooter({ text: 'Enox Cheat System • HWID Lock aktiv' })
             .setTimestamp();
         
         message.reply({ embeds: [embed] });
@@ -187,7 +219,17 @@ client.on('messageCreate', async (message) => {
         const newExpiry = new Date(users[username].expires_at).toLocaleString('de-DE');
         saveDB();
         
-        message.reply(`✅ **${username}** +${days} Tage\n🕐 ${oldExpiry} → ${newExpiry}`);
+        const embed = new EmbedBuilder()
+            .setTitle('⏰ Lizenz verlängert')
+            .setColor(0x9C27B0)
+            .addFields(
+                { name: '👤 Benutzer', value: username, inline: true },
+                { name: '📆 + Tage', value: `${days} Tage`, inline: true },
+                { name: '🕐 Alt', value: oldExpiry, inline: false },
+                { name: '🕐 Neu', value: newExpiry, inline: false }
+            );
+        
+        message.reply({ embeds: [embed] });
     }
     
     // ========== !users ==========
@@ -197,16 +239,17 @@ client.on('messageCreate', async (message) => {
         }
         
         const userList = Object.entries(users).map(([name, data]) => {
-            const status = data.expires_at > Date.now() ? '🟢 Aktiv' : '🔴 Abgelaufen';
-            const hwid_status = data.hwid ? '🔒 Gebunden' : '⚪ Frei';
-            return `**${name}** | ${data.rank} | ${status} | ${hwid_status} | Bis: ${new Date(data.expires_at).toLocaleDateString()}`;
+            const status = data.expires_at > Date.now() ? '🟢' : '🔴';
+            const hwid_status = data.hwid ? '🔒' : '⚪';
+            const daysLeft = Math.ceil((data.expires_at - Date.now()) / (1000 * 60 * 60 * 24));
+            return `${status} **${name}** | ${hwid_status} | ${daysLeft} Tage`;
         }).join('\n');
         
         const embed = new EmbedBuilder()
             .setTitle('📋 Benutzerliste')
             .setColor(0x9C27B0)
-            .setDescription(userList || 'Keine Benutzer')
-            .setFooter({ text: `Total: ${Object.keys(users).length} Benutzer` });
+            .setDescription(userList || 'Keine Benutzer vorhanden')
+            .setFooter({ text: `🟢 Aktiv | 🔴 Abgelaufen | 🔒 HWID gebunden | ⚪ Frei • Total: ${Object.keys(users).length}` });
         
         message.reply({ embeds: [embed] });
     }
@@ -225,26 +268,29 @@ client.on('messageCreate', async (message) => {
         
         const user = users[username];
         const status = user.expires_at > Date.now() ? '🟢 Aktiv' : '🔴 Abgelaufen';
-        const hwid_status = user.hwid ? `🔒 ${user.hwid.substring(0, 8)}...` : '⚪ Nicht gebunden';
+        const hwid_status = user.hwid ? `🔒 \`${user.hwid.substring(0, 16)}...\`` : '⚪ Nicht gebunden';
         const expires = new Date(user.expires_at).toLocaleString('de-DE');
         const created = new Date(user.created_at).toLocaleString('de-DE');
+        const daysLeft = Math.ceil((user.expires_at - Date.now()) / (1000 * 60 * 60 * 24));
         
         const embed = new EmbedBuilder()
-            .setTitle(`👤 ${username}`)
+            .setTitle(`👤 Benutzer: ${username}`)
             .setColor(0x9C27B0)
             .addFields(
-                { name: 'Status', value: status, inline: true },
-                { name: 'Rang', value: user.rank, inline: true },
-                { name: 'HWID', value: hwid_status, inline: true },
-                { name: 'Erstellt von', value: user.created_by, inline: true },
-                { name: 'Erstellt am', value: created, inline: true },
-                { name: 'Gültig bis', value: expires, inline: true }
-            );
+                { name: '📊 Status', value: status, inline: true },
+                { name: '🎖️ Rang', value: user.rank, inline: true },
+                { name: '⏰ Tage übrig', value: `${daysLeft} Tage`, inline: true },
+                { name: '🔑 HWID', value: hwid_status, inline: false },
+                { name: '👮 Erstellt von', value: user.created_by, inline: true },
+                { name: '📅 Erstellt am', value: created, inline: true },
+                { name: '⏱️ Gültig bis', value: expires, inline: true }
+            )
+            .setFooter({ text: 'Enox Cheat System' });
         
         message.reply({ embeds: [embed] });
     }
     
-    // ========== !resetuser <name> ========== (HWID zurücksetzen)
+    // ========== !resetuser <name> ==========
     if (command === 'resetuser') {
         if (!isAdmin(message.member)) {
             return message.reply('❌ Keine Berechtigung!');
@@ -277,6 +323,7 @@ client.on('messageCreate', async (message) => {
                 { name: '🟢 Aktiv', value: `${active}`, inline: true },
                 { name: '🔴 Abgelaufen', value: `${expired}`, inline: true },
                 { name: '🔒 HWID Gebunden', value: `${bound}`, inline: true },
+                { name: '⚪ Frei', value: `${total - bound}`, inline: true },
                 { name: '🖥️ API Status', value: '✅ Online', inline: true }
             )
             .setFooter({ text: `Enox Cheat System • ${new Date().toLocaleString()}` });
@@ -289,14 +336,14 @@ client.on('messageCreate', async (message) => {
         const embed = new EmbedBuilder()
             .setTitle('🤖 Enox Bot Commands')
             .setColor(0x9C27B0)
-            .setDescription('**Admin Commands:**')
+            .setDescription('**🔐 Admin Commands (nur für Admins)**')
             .addFields(
-                { name: '!createuser <name> <pass> <tage>', value: 'Erstellt neuen Benutzer', inline: false },
-                { name: '!deleteuser <name>', value: 'Löscht Benutzer', inline: false },
-                { name: '!addtime <name> <tage>', value: 'Verlängert Lizenz', inline: false },
-                { name: '!resetuser <name>', value: 'Setzt HWID zurück', inline: false },
-                { name: '!users', value: 'Zeigt alle Benutzer', inline: false },
-                { name: '!userinfo <name>', value: 'Zeigt Benutzerdetails', inline: false },
+                { name: '!createuser <name> <pass> <tage>', value: 'Erstellt neuen Benutzer mit Lizenz', inline: false },
+                { name: '!deleteuser <name>', value: 'Löscht einen Benutzer', inline: false },
+                { name: '!addtime <name> <tage>', value: 'Verlängert Lizenz eines Users', inline: false },
+                { name: '!resetuser <name>', value: 'Setzt HWID zurück (für neuen PC)', inline: false },
+                { name: '!users', value: 'Zeigt alle Benutzer an', inline: false },
+                { name: '!userinfo <name>', value: 'Zeigt Details zu einem Benutzer', inline: false },
                 { name: '!stats', value: 'Zeigt Serverstatistiken', inline: false }
             )
             .setFooter({ text: 'Enox Cheat System • Premium Protection' });
@@ -305,4 +352,11 @@ client.on('messageCreate', async (message) => {
     }
 });
 
-client.login('YOUR_DISCORD_BOT_TOKEN'); // HIER DEIN BOT TOKEN EINTRAGEN
+// Bot starten - TOKEN aus Environment Variable
+const TOKEN = process.env.DISCORD_TOKEN;
+if (!TOKEN) {
+    console.error('❌ DISCORD_TOKEN nicht gesetzt! Füge eine Environment Variable hinzu.');
+    process.exit(1);
+}
+
+client.login(TOKEN);
