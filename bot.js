@@ -13,6 +13,23 @@ const client = new Client({
     ]
 });
 
+// ============== KONFIGURATION ==============
+const ALLOWED_ROLE_ID = "1513159020897243247";  // Deine Admin Rolle
+const ALLOWED_CHANNEL_ID = "1513165818744148040"; // Dein Bot Channel
+
+// Prüft ob der Benutzer die richtige Rolle hat UND im richtigen Channel ist
+function hasPermission(message) {
+    // Prüfe Channel
+    if (message.channel.id !== ALLOWED_CHANNEL_ID) {
+        return false;
+    }
+    // Prüfe Rolle
+    if (!message.member.roles.cache.has(ALLOWED_ROLE_ID)) {
+        return false;
+    }
+    return true;
+}
+
 // ============== DATENBANK ==============
 const DB_FILE = './users.json';
 let users = {};
@@ -36,7 +53,6 @@ app.use(cors());
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 
-// WICHTIG: Alle Methoden erlauben
 app.use((req, res, next) => {
     console.log(`${req.method} ${req.url}`);
     res.header('Access-Control-Allow-Origin', '*');
@@ -48,7 +64,7 @@ app.use((req, res, next) => {
     next();
 });
 
-// ========== LOGIN ENDPOINT - WICHTIG ==========
+// ========== LOGIN ENDPOINT ==========
 app.post('/api/login', (req, res) => {
     console.log('📝 Login request received');
     console.log('Body:', req.body);
@@ -69,7 +85,6 @@ app.post('/api/login', (req, res) => {
         return res.json({ success: false, message: 'Falsches Passwort!' });
     }
     
-    // HWID prüfen/locken
     if (user.hwid === "") {
         user.hwid = hwid;
         saveDB();
@@ -78,7 +93,6 @@ app.post('/api/login', (req, res) => {
         return res.json({ success: false, message: 'Diese Lizenz ist an eine andere HWID gebunden!' });
     }
     
-    // Ablauf prüfen
     if (user.expires_at && user.expires_at < Date.now()) {
         return res.json({ success: false, message: 'Lizenz abgelaufen! Kontaktiere den Support.' });
     }
@@ -101,12 +115,10 @@ app.post('/api/login', (req, res) => {
     res.json(response);
 });
 
-// GET Endpoint für Tests
 app.get('/api/login', (req, res) => {
     res.json({ message: 'Bitte POST request verwenden!', success: false });
 });
 
-// Status Endpoint
 app.get('/api/status', (req, res) => {
     const totalUsers = Object.keys(users).length;
     const activeUsers = Object.values(users).filter(u => u.expires_at > Date.now()).length;
@@ -119,12 +131,10 @@ app.get('/api/status', (req, res) => {
     });
 });
 
-// Health Check
 app.get('/health', (req, res) => {
     res.json({ status: 'online', uptime: process.uptime() });
 });
 
-// Root
 app.get('/', (req, res) => {
     res.json({ 
         name: 'Enox API', 
@@ -138,15 +148,11 @@ app.listen(PORT, () => console.log(`✅ API läuft auf Port ${PORT}`));
 
 // ============== DISCORD BOT ==============
 const PREFIX = '!';
-const ADMIN_ROLE_ID = process.env.ADMIN_ROLE_ID || '';
-
-function isAdmin(member) {
-    if (!ADMIN_ROLE_ID) return member.permissions.has(PermissionsBitField.Flags.Administrator);
-    return member.roles.cache.has(ADMIN_ROLE_ID) || member.permissions.has(PermissionsBitField.Flags.Administrator);
-}
 
 client.on('ready', () => {
     console.log(`✅ Bot eingeloggt als ${client.user.tag}`);
+    console.log(`📢 Befehle nur in Channel ID: ${ALLOWED_CHANNEL_ID}`);
+    console.log(`👑 Benötigte Rolle ID: ${ALLOWED_ROLE_ID}`);
     client.user.setActivity('Enox Cheat System', { type: 'WATCHING' });
 });
 
@@ -154,14 +160,23 @@ client.on('messageCreate', async (message) => {
     if (message.author.bot) return;
     if (!message.content.startsWith(PREFIX)) return;
     
+    // ========== PERMISSIONS CHECK ==========
+    if (!hasPermission(message)) {
+        const wrongChannelMsg = message.channel.id !== ALLOWED_CHANNEL_ID 
+            ? `❌ Befehl nur in <#${ALLOWED_CHANNEL_ID}> erlaubt!` 
+            : `❌ Du hast keine Berechtigung für diesen Befehl! (Benötigte Rolle: <@&${ALLOWED_ROLE_ID}>)`;
+        
+        return message.reply(wrongChannelMsg).then(msg => {
+            setTimeout(() => msg.delete(), 5000);
+            message.delete();
+        });
+    }
+    
     const args = message.content.slice(PREFIX.length).trim().split(/ +/);
     const command = args.shift().toLowerCase();
     
+    // ========== !createuser ==========
     if (command === 'createuser') {
-        if (!isAdmin(message.member)) {
-            return message.reply('❌ Keine Berechtigung! Du brauchst die Admin Rolle.');
-        }
-        
         const username = args[0];
         const password = args[1];
         const days = parseInt(args[2]);
@@ -204,8 +219,8 @@ client.on('messageCreate', async (message) => {
         message.reply({ embeds: [embed] });
     }
     
+    // ========== !deleteuser ==========
     if (command === 'deleteuser') {
-        if (!isAdmin(message.member)) return message.reply('❌ Keine Berechtigung!');
         const username = args[0];
         if (!username) return message.reply('✅ !deleteuser <Benutzername>');
         if (!users[username]) return message.reply('❌ Benutzer nicht gefunden!');
@@ -214,8 +229,8 @@ client.on('messageCreate', async (message) => {
         message.reply(`✅ Benutzer **${username}** wurde gelöscht!`);
     }
     
+    // ========== !addtime ==========
     if (command === 'addtime') {
-        if (!isAdmin(message.member)) return message.reply('❌ Keine Berechtigung!');
         const username = args[0];
         const days = parseInt(args[1]);
         if (!username || !days) return message.reply('✅ !addtime <Benutzername> <Tage>');
@@ -225,8 +240,8 @@ client.on('messageCreate', async (message) => {
         message.reply(`✅ **${username}** +${days} Tage verlängert!`);
     }
     
+    // ========== !resetuser ==========
     if (command === 'resetuser') {
-        if (!isAdmin(message.member)) return message.reply('❌ Keine Berechtigung!');
         const username = args[0];
         if (!username || !users[username]) return message.reply('❌ Benutzer nicht gefunden!');
         users[username].hwid = '';
@@ -234,8 +249,8 @@ client.on('messageCreate', async (message) => {
         message.reply(`✅ HWID von **${username}** wurde zurückgesetzt!`);
     }
     
+    // ========== !users ==========
     if (command === 'users') {
-        if (!isAdmin(message.member)) return message.reply('❌ Keine Berechtigung!');
         const userList = Object.entries(users).map(([name, data]) => {
             const status = data.expires_at > Date.now() ? '🟢' : '🔴';
             const hwid_status = data.hwid ? '🔒' : '⚪';
@@ -246,8 +261,8 @@ client.on('messageCreate', async (message) => {
         message.reply({ embeds: [embed] });
     }
     
+    // ========== !userinfo ==========
     if (command === 'userinfo') {
-        if (!isAdmin(message.member)) return message.reply('❌ Keine Berechtigung!');
         const username = args[0];
         if (!username || !users[username]) return message.reply('❌ Benutzer nicht gefunden!');
         const user = users[username];
@@ -264,6 +279,7 @@ client.on('messageCreate', async (message) => {
         message.reply({ embeds: [embed] });
     }
     
+    // ========== !stats ==========
     if (command === 'stats') {
         const total = Object.keys(users).length;
         const active = Object.values(users).filter(u => u.expires_at > Date.now()).length;
@@ -279,9 +295,10 @@ client.on('messageCreate', async (message) => {
         message.reply({ embeds: [embed] });
     }
     
+    // ========== !help ==========
     if (command === 'help') {
         const embed = new EmbedBuilder().setTitle('🤖 Enox Bot Commands').setColor(0x9C27B0)
-            .setDescription('**🔐 Admin Commands**')
+            .setDescription(`**🔐 Admin Commands**\nNur verfügbar in <#${ALLOWED_CHANNEL_ID}> mit der Rolle <@&${ALLOWED_ROLE_ID}>`)
             .addFields(
                 { name: '!createuser <name> <pass> <tage>', value: 'Erstellt neuen Benutzer', inline: false },
                 { name: '!deleteuser <name>', value: 'Löscht Benutzer', inline: false },
@@ -290,7 +307,8 @@ client.on('messageCreate', async (message) => {
                 { name: '!users', value: 'Zeigt alle Benutzer', inline: false },
                 { name: '!userinfo <name>', value: 'Zeigt Details', inline: false },
                 { name: '!stats', value: 'Zeigt Statistiken', inline: false }
-            );
+            )
+            .setFooter({ text: `Channel: ${ALLOWED_CHANNEL_ID} | Rolle: ${ALLOWED_ROLE_ID}` });
         message.reply({ embeds: [embed] });
     }
 });
